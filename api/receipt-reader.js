@@ -110,8 +110,17 @@ async function callAnthropic(imageB64, mime, signal){
 
 export default async function handler(req, res){
   if (req.method === 'GET'){
-    // Health probe: whether a provider is configured. Never the key itself.
-    return res.status(200).json({ ok: true, configured: !!PROVIDER, provider: PROVIDER, model: PROVIDER ? MODEL : null });
+    /* Health probe: whether a provider is configured, and which of the two key
+       names this running instance can actually see. Booleans only — never a key,
+       never a fragment of one — so that "configured: false" can be diagnosed
+       without guessing which half of the setup is missing. */
+    return res.status(200).json({
+      ok: true,
+      configured: !!PROVIDER,
+      provider: PROVIDER,
+      model: PROVIDER ? MODEL : null,
+      keys: { gemini: !!GEMINI_KEY, anthropic: !!ANTHROPIC_KEY }
+    });
   }
   if (req.method !== 'POST') return fail(res, 405, 'INVALID_REQUEST', 'Use POST.');
   if (!PROVIDER) return fail(res, 503, 'ANTHROPIC_AUTH_FAILED', 'Receipt reader is not configured on the server.');
