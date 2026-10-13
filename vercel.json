@@ -1,0 +1,11 @@
+{
+  "headers": [
+    { "source": "/vendor/tesseract/core/(.*)",
+      "headers": [{ "key": "Content-Type", "value": "application/wasm" },
+                  { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/vendor/tesseract/lang/(.*)",
+      "headers": [{ "key": "Content-Type", "value": "application/octet-stream" },
+                  { "key": "Content-Encoding", "value": "gzip" }] }
+  ],
+  "functions": { "api/receipt-reader.js": { "maxDuration": 60 } }
+}

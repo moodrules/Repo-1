@@ -1,0 +1,12 @@
+# Secrets — never commit. Keys live in Vercel env vars.
+.env
+.env.local
+.env*.local
+.vercel
+node_modules
+
+# Bundled OCR engine (~6 MB), fetched by ./setup.sh
+vendor/tesseract/tesseract.min.js
+vendor/tesseract/worker.min.js
+vendor/tesseract/core/
+vendor/tesseract/lang/
