@@ -1863,14 +1863,42 @@ function mapBackendResult(data){
   };
 }
 
+/* A vision model is not Tesseract, and must not be fed Tesseract's picture.
+   preprocessImage crops, converts to grayscale and stretches contrast, which
+   helps a glyph matcher and actively hurts a model that reads layout and colour
+   — faint thermal print gets crushed, and the Arabic/English column structure
+   is part of what the model uses. It is also larger than it needs to be, and
+   payload size drives latency. So the server path sends a plain, downscaled
+   colour JPEG of the original. */
+const VISION_MAX_LONG = 1500;
+async function preprocessForVision(file){
+  let bitmap;
+  try { bitmap = await createImageBitmap(file, {imageOrientation:'from-image'}); }
+  catch(_){
+    try { bitmap = await createImageBitmap(file); }
+    catch(e){ throw new ScanError('image', 'undecodable image'); }
+  }
+  const longest = Math.max(bitmap.width, bitmap.height);
+  const scale = longest > VISION_MAX_LONG ? VISION_MAX_LONG / longest : 1;
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  if (bitmap.close) bitmap.close();
+  return {canvas};
+}
+
 const backendProvider = {
   id:'backend', connected:!!BACKEND_URL, label:'Server-side reader',
   async extract(file, onProgress, token){
     if (!BACKEND_URL) throw new ScanError('cdn', BACKEND_FAIL.UNREACHABLE);
     ocrLog('READER_REQUEST_STARTED', BACKEND_URL);
     onProgress && onProgress('prep', 0.15, 'Preparing receipt…');
-    const {canvas} = await preprocessImage(file);
-    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+    const {canvas} = await preprocessForVision(file);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.8));
     canvas.width = 0; canvas.height = 0;
     if (token && token.cancelled) throw new CancelledError();
     const b64 = await new Promise((res, rej) => {

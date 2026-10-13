@@ -32,7 +32,12 @@ const MODEL    = PROVIDER === 'gemini' ? GEMINI_MODEL : ANTHROPIC_MODEL;
 
 const MAX_BYTES = 8 * 1024 * 1024;                       // 8 MB decoded
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-const TIMEOUT_MS = 60000;
+/* Vercel kills this function at 60s (vercel.json). A budget at or above that
+   wall means the platform's bare 504 reaches the browser instead of this
+   function's JSON error, which is how a timeout arrives with no message at all.
+   So: finish, and answer, before the wall. */
+const TOTAL_BUDGET_MS = 45000;
+const PER_ATTEMPT_MS = 22000;
 
 /* The rules below are not decoration. Each one corresponds to a way a real
    receipt was misread: a POS header parsed as a 2.00 dish, a discount line
@@ -88,10 +93,27 @@ function isModelProblem(status, body){
   return /model|not found|not supported|unsupported|does not exist/i.test(String(body || ''));
 }
 
-async function callGemini(imageB64, mime, signal){
+async function callGemini(imageB64, mime, deadline){
   let last = null;
   for (const model of GEMINI_FALLBACKS){
-    const attempt = await geminiAttempt(model, imageB64, mime, signal);
+    const left = deadline - Date.now();
+    if (left < 4000) break;                       // not enough time to be worth starting
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), Math.min(PER_ATTEMPT_MS, left));
+    let attempt;
+    try {
+      attempt = await geminiAttempt(model, imageB64, mime, ctl.signal);
+    } catch(e){
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError'){
+        // One slow model must not consume the whole budget silently.
+        console.error('[receipt-reader] model timed out, trying the next:', model);
+        last = {timedOut: true, model};
+        continue;
+      }
+      throw e;
+    }
+    clearTimeout(timer);
     if (attempt.res.ok) return Object.assign(attempt, {model});
     const body = await attempt.res.clone().text().catch(() => '');
     if (!isModelProblem(attempt.res.status, body)) return Object.assign(attempt, {model});
@@ -176,21 +198,27 @@ export default async function handler(req, res){
   if (approxBytes < 1024)
     return fail(res, 400, 'INVALID_IMAGE', 'Image data looks empty.');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
   let call;
   try{
-    call = PROVIDER === 'gemini'
-      ? await callGemini(imageB64, mime, controller.signal)
-      : await callAnthropic(imageB64, mime, controller.signal);
+    if (PROVIDER === 'gemini'){
+      call = await callGemini(imageB64, mime, deadline);
+    } else {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), TOTAL_BUDGET_MS);
+      try { call = await callAnthropic(imageB64, mime, ctl.signal); }
+      finally { clearTimeout(timer); }
+    }
   }catch(e){
-    clearTimeout(timer);
     const aborted = e && e.name === 'AbortError';
     console.error('[receipt-reader] upstream request failed:', PROVIDER, aborted ? 'timeout' : (e && e.name));
     return fail(res, 504, 'ANTHROPIC_REQUEST_FAILED',
-      aborted ? 'Receipt reader timed out.' : 'Receipt reader temporarily unavailable.');
+      aborted ? 'The reader provider did not answer in time. Try again, or use a smaller photo.'
+              : 'Receipt reader temporarily unavailable.');
   }
-  clearTimeout(timer);
+  if (!call || call.timedOut || !call.res)
+    return fail(res, 504, 'ANTHROPIC_REQUEST_FAILED',
+      `The reader provider did not answer within ${Math.round(TOTAL_BUDGET_MS/1000)}s${call && call.model ? ' (last tried ' + call.model + ')' : ''}. Try again, or use a smaller photo.`);
   const upstream = call.res;
 
   if (upstream.status === 401 || upstream.status === 403){
