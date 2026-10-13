@@ -1351,8 +1351,13 @@ async function runOcrDiagnostics(){
   add(typeof WebAssembly === 'object', 'WebAssembly', typeof WebAssembly === 'object' ? 'supported' : 'not available');
   add(canUseWorkers(), 'Web Worker', canUseWorkers() ? 'supported' : (OCR_DIAGNOSTICS.workers || 'blocked'));
   add(true, 'Engine', (OCR_STATUS.engine || 'not chosen yet') + (OCR_STATUS.code ? ` — ${OCR_STATUS.code}` : ''));
-  add(!!OCR_DIAGNOSTICS.workerProbe && OCR_DIAGNOSTICS.workerProbe === 'ok', 'Worker constructible',
-      OCR_DIAGNOSTICS.workerProbe || 'not probed');
+  /* When the server reader is the engine, the on-device worker is irrelevant —
+     reporting "not probed" as a red cross invites chasing a problem that does
+     not exist. Only mark it failed when something actually depends on it. */
+  if (OCR_STATUS.engine === 'backend' || READER.kind === 'backend')
+    add(true, 'Worker constructible', 'not needed — reading happens on the server');
+  else
+    add(OCR_DIAGNOSTICS.workerProbe === 'ok', 'Worker constructible', OCR_DIAGNOSTICS.workerProbe || 'not probed');
   add(true, 'Engine source', OCR_SOURCES.name + (OCR_SOURCES.local ? ' (same origin)' : ' (cross-origin CDN — bundle vendor/tesseract/ to fix)'));
   add(true, 'Receipt language', ocrLanguage());
 

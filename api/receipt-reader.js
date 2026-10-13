@@ -73,8 +73,40 @@ function fail(res, status, error, message){
 
 /* ------------------------------- providers ------------------------------- */
 
+/* Model availability differs per account and Google's docs do not say which
+   Flash models take image input, so a single hard-coded name is a guess that
+   fails in production rather than in review. The configured model is tried
+   first and the rest only on a model-shaped rejection; anything else (auth,
+   quota, a bad request) is returned immediately, never retried. The model that
+   answered is reported back in the response. */
+const GEMINI_FALLBACKS = [GEMINI_MODEL, 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash']
+  .filter((m, i, a) => m && a.indexOf(m) === i);
+
+function isModelProblem(status, body){
+  if (status === 404) return true;
+  if (status !== 400) return false;
+  return /model|not found|not supported|unsupported|does not exist/i.test(String(body || ''));
+}
+
 async function callGemini(imageB64, mime, signal){
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+  let last = null;
+  for (const model of GEMINI_FALLBACKS){
+    const attempt = await geminiAttempt(model, imageB64, mime, signal);
+    if (attempt.res.ok) return Object.assign(attempt, {model});
+    const body = await attempt.res.clone().text().catch(() => '');
+    if (!isModelProblem(attempt.res.status, body)) return Object.assign(attempt, {model});
+    console.error('[receipt-reader] model rejected, trying the next:', model, attempt.res.status);
+    last = Object.assign(attempt, {model});
+  }
+  return last;
+}
+
+function geminiAttempt(model, imageB64, mime, signal){
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  return fetchGemini(url, imageB64, mime, signal);
+}
+
+async function fetchGemini(url, imageB64, mime, signal){
   const r = await fetch(url, {
     method: 'POST',
     signal,
@@ -170,13 +202,29 @@ export default async function handler(req, res){
   if (upstream.status === 404){
     // Almost always a model name this account cannot use — worth saying plainly,
     // because the fix is one environment variable, not a code change.
-    console.error('[receipt-reader] model not available:', PROVIDER, MODEL);
+    let detail = '';
+    try { detail = String((JSON.parse(await upstream.text()).error || {}).message || '').slice(0, 200); } catch(_){}
+    console.error('[receipt-reader] model not available:', PROVIDER, MODEL, detail);
     return fail(res, 502, 'ANTHROPIC_REQUEST_FAILED',
-      `The configured model (${MODEL}) is not available to this account. Set ${PROVIDER === 'gemini' ? 'GEMINI_MODEL' : 'ANTHROPIC_MODEL'} to one that is.`);
+      `The configured model (${MODEL}) is not available to this account. Set ${PROVIDER === 'gemini' ? 'GEMINI_MODEL' : 'ANTHROPIC_MODEL'} to one that is.${detail ? ' Provider said: ' + detail : ''}`);
   }
   if (!upstream.ok){
-    console.error('[receipt-reader] upstream HTTP', upstream.status, PROVIDER);
-    return fail(res, 502, 'ANTHROPIC_REQUEST_FAILED', 'Receipt reader temporarily unavailable.');
+    /* Pass the provider's own complaint through. "Temporarily unavailable" is
+       a lie when the provider said "this field is invalid" — and an error that
+       cannot be read from the client cannot be fixed from the client. Only the
+       provider's status, code and message are forwarded, trimmed; the request
+       body, the image and the key are never echoed. */
+    let detail = '';
+    try{
+      const body = await upstream.text();
+      const parsed = JSON.parse(body);
+      const err = parsed && parsed.error;
+      detail = err ? [err.status, err.message].filter(Boolean).join(': ') : String(body);
+    }catch(_){ detail = ''; }
+    detail = detail.replace(/\s+/g, ' ').trim().slice(0, 300);
+    console.error('[receipt-reader] upstream HTTP', upstream.status, PROVIDER, detail);
+    return fail(res, 502, 'ANTHROPIC_REQUEST_FAILED',
+      `Reader provider returned HTTP ${upstream.status}${detail ? ' — ' + detail : '.'}`);
   }
 
   let payload;
@@ -196,5 +244,5 @@ export default async function handler(req, res){
     return fail(res, 502, 'RECEIPT_PARSE_FAILED', 'Receipt data had an unexpected shape.');
 
   // Nothing is stored. The image exists only for the life of this request.
-  return res.status(200).json({ ok: true, provider: PROVIDER, model: MODEL, data });
+  return res.status(200).json({ ok: true, provider: PROVIDER, model: call.model || MODEL, data });
 }
