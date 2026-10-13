@@ -28,17 +28,34 @@ Full steps and the verification checklist: `DEPLOYMENT.md`.
 
 ## How reading works
 
-Tap **Scan your check** or **Upload a receipt photo**: the app captures and
-previews the photo, then opens the paste panel with a prompt to send along with
-it. Any AI reads the photo, you paste its answer back, and the normal import
-pipeline takes over — including a reconciliation check against the receipt's own
-printed totals.
+Reading mode is decided once at boot, never guessed:
 
-Why not read it on the device automatically? It was tried and measured. On a
-bilingual UAE receipt — every dish printed in English with an Arabic line under
-it — Tesseract read the Arabic lines as Latin text and invented priced items:
-AED 1,994.24 of "items" against a true 1,114.00. The reconciliation guard caught
-it, but a reading that is thrown away after 20 seconds is worse than no reading.
+1. **A configured server reader** (`GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`) →
+   the photo is read in the app. Tap Scan, get items. The key stays on the
+   server; the browser only ever posts the image to `/api/receipt-reader` on its
+   own origin.
+2. **The on-device engine**, if explicitly turned on → read in the browser.
+3. **Neither** → photo hand-off: the app captures and previews the photo and
+   opens a paste panel with a prompt for any AI.
+
+Whichever path ran, the item list is reconciled against the receipt's own
+printed totals before it reaches the review screen. A list that does not add up
+is never applied — the photo is kept, the paste panel opens, and the reasons are
+shown. A wrong bill nobody can audit is worse than no reading.
+
+## Free setup (Gemini)
+
+Create a key at aistudio.google.com, then in Vercel → Settings → Environment
+Variables add `GEMINI_API_KEY` (Production + Preview) and redeploy. Optional:
+`GEMINI_MODEL`, default `gemini-3.6-flash`. Google lists Flash input and output
+as free of charge, and states that free-tier usage may be used to improve their
+products — receipts leave the device on this path.
+
+## Why not on-device by default
+
+It was tried and measured. On a bilingual UAE receipt — every dish printed in
+English with an Arabic line under it — Tesseract read the Arabic lines as Latin
+text and invented priced items: AED 1,994.24 of "items" against a true 1,114.00.
 The engine is still installed and still works on clean English-only receipts;
 set `window.SPLIT_CONFIG.OCR_UI = true` (or `split.ocrAuto` = `1` in
 localStorage) to turn it back on.

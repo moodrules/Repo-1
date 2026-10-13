@@ -248,6 +248,16 @@ p{margin:0}
    on the strength of a flag. window.SPLIT_CONFIG.OCR_UI forces either way. */
 let OCR_UI_ENABLED = false;
 
+/* One place answers "may the on-device engine run here?", so the boot gate and
+   the reader probe cannot disagree. */
+function onDeviceOptedIn(){
+  try{
+    const cfg = (typeof window !== 'undefined' && window.SPLIT_CONFIG) || {};
+    if (typeof cfg.OCR_UI === 'boolean') return cfg.OCR_UI;
+    return localStorage.getItem('split.ocrAuto') === '1';
+  }catch(_){ return false; }
+}
+
 async function detectLocalEngine(){
   try{
     const cfg = (typeof window !== 'undefined' && window.SPLIT_CONFIG) || {};
@@ -260,9 +270,7 @@ async function detectLocalEngine(){
        and costs nothing. The engine stays installed for English-only receipts
        — window.SPLIT_CONFIG.OCR_UI = true, or split.ocrAuto in localStorage,
        turns it back on with no other change. */
-    let opted = null;
-    try { opted = localStorage.getItem('split.ocrAuto'); } catch(_){}
-    if (opted !== '1') return false;
+    if (!onDeviceOptedIn()) return false;
     if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return false;
     const r = await fetch(OCR_SOURCE_SETS[0].worker, {method:'GET', cache:'force-cache'});
     if (!r || !r.ok) return false;
@@ -1812,12 +1820,41 @@ function mapBackendResult(data){
     })
     .filter(Boolean);
   const itemsSum = items.reduce((a,i)=> a + i.qty * i.unitPrice, 0);
+
+  /* The receipt's own printed figures, when the reader could see them. They are
+     never used to correct an item — they are what the items get CHECKED
+     against, which is the only reason to trust a list nobody typed. */
+  const pr = (data.printed && typeof data.printed === 'object') ? data.printed : {};
+  const printedSubtotal = cents(pr.subtotal);
+  const printedTotal    = cents(pr.total);
+  const discount        = cents(pr.discount) || 0;
+  const service         = cents(pr.service_charge) || 0;
+  const vat             = cents(pr.vat) || 0;
+  const rate = (typeof pr.vat_rate_percent === 'number' && pr.vat_rate_percent > 0 && pr.vat_rate_percent < 30)
+             ? pr.vat_rate_percent / 100 : null;
+
+  const problems = [];
+  if (!items.length) problems.push('no items were read');
+  const check = printedTotal ?? printedSubtotal;
+  if (check && itemsSum){
+    const rebuilt = itemsSum - discount + service + vat;
+    const off = Math.min(Math.abs(rebuilt - check), Math.abs(itemsSum - check)) / Math.max(check, 1);
+    if (off > 0.02)
+      problems.push(`the items add up to ${(itemsSum/100).toFixed(2)} against a printed ${(check/100).toFixed(2)}`);
+  } else if (items.length){
+    problems.push('the receipt total was not readable, so the items could not be checked');
+  }
+
   return {
-    currency:'AED', country:null, vatIncluded:true, vatRate:null,
+    currency: (typeof pr.currency === 'string' && /^[A-Z]{3}$/.test(pr.currency)) ? pr.currency : 'AED',
+    country:null, vatIncluded:true, vatRate:rate,
     merchant:null, date:null, time:null, receiptNumber:null, paymentMethod:null,
     warnings:[], items,
-    subtotal:itemsSum, vat:0, serviceCharge:0, discount:0, grandTotal:itemsSum,
-    rawText:'', itemsSum, overallConfidence:null, engine:'backend'
+    subtotal: printedSubtotal ?? itemsSum,
+    vat, serviceCharge: service, discount,
+    grandTotal: printedTotal ?? itemsSum,
+    rawText:'', itemsSum, overallConfidence:null, engine:'backend',
+    quality: {ok: problems.length === 0, problems, checked: check != null}
   };
 }
 
@@ -2208,6 +2245,22 @@ async function probeReader(){
   if (SPLIT_CONFIG.OCR_PROVIDER && SPLIT_CONFIG.OCR_PROVIDER !== 'tesseract' && SPLIT_CONFIG.OCR_API_KEY){
     READER.kind = 'hosted'; return READER;
   }
+  /* A configured server-side reader wins outright. It reads bilingual receipts
+     — which on-device Tesseract demonstrably cannot — and the key never leaves
+     the server. Asked once, cheaply: the health probe reports configuration
+     only and never makes the reader READY; that still takes a real receipt. */
+  if (BACKEND_URL){
+    try{
+      const health = await backendProvider.healthCheck();
+      READER.kind = 'backend';
+      READER.reason = '';
+      READER.backend = health || null;
+      ocrLog('READER_CAPABILITIES_OK', `server-side reader configured (${(health && health.provider) || 'provider'} / ${(health && health.model) || 'model'})`);
+      return READER;
+    }catch(e){
+      ocrLog('BACKEND_NOT_CONFIGURED', (e && e.message) || 'health check failed');
+    }
+  }
   if (typeof location !== 'undefined' && location.protocol === 'file:'){
     READER.kind = 'blocked'; READER.why = 'fileprotocol';
     READER.reason = 'opened as a local file (file://), where browsers block the OCR worker';
@@ -2224,6 +2277,15 @@ async function probeReader(){
      two is how the previous build talked itself into a doomed path — a bundled
      path that 404s constructs a worker fine, and a CDN that serves fine cannot
      be constructed from. One pass over the sets, no hopeful retries. */
+  if (!onDeviceOptedIn()){
+    // Nothing left to try: on-device reading is off and no server reader is
+    // configured. Probing CDNs here would cost requests on every single boot
+    // to reach a conclusion already known.
+    READER.kind = 'blocked'; READER.why = 'handoff';
+    READER.reason = 'reading happens by hand-off: the photo is captured here and transcribed elsewhere';
+    return READER;
+  }
+
   const tried = [];
   let crossOriginRefused = false;
   for (const set of OCR_SOURCE_SETS){
@@ -3954,17 +4016,29 @@ restore();
 render();
 // Capability resolution is async and never instant; re-render once it lands so
 // the import screen reflects what can actually be done here.
-detectLocalEngine().then(present => {
+/* Reading mode, decided once at boot and never guessed:
+     1. a configured server-side reader  → direct in-app reading;
+     2. the on-device engine, if opted in → direct in-app reading;
+     3. otherwise                         → photo hand-off.
+   Only (1) and (2) turn the reading UI on. */
+detectReader().then(r => {
+  if (r.kind !== 'backend' && r.kind !== 'hosted') return null;
+  OCR_UI_ENABLED = true;
+  activeProvider = providerFor(r.kind);
+  ocrLog('READING_DIRECT', 'photos are read in the app via the ' + r.kind + ' reader');
+  render();
+  return 'done';
+}).catch(() => null).then(done => {
+  if (done) return;
+  return detectLocalEngine().then(present => {
   if (!present){
     ocrLog('READING_VIA_HANDOFF', 'automatic on-device reading is off by default — the photo is captured here and transcribed by an AI, which is accurate on bilingual receipts and free');
     return;
   }
   OCR_UI_ENABLED = true;
   ocrLog('ENGINE_PRESENT', 'same-origin engine found — on-device reading enabled, proving it now');
+  activeProvider = providerFor(READER.kind);
   render();                               // brings up the reading UI and runs the smoke test
-  return detectReader().then(r => {
-    activeProvider = providerFor(r.kind);
-    if (state.step === 'check' && state.ui.checkView === 'import') render();
   });
 });
 try { history.replaceState({step: state.step, checkView: state.ui.checkView}, ''); } catch(_){}
