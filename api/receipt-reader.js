@@ -60,9 +60,15 @@ Rules:
 - Exclude header lines printed above the items: restaurant name, date, time, tax
   number, and markers such as DUPLICATA, CHECK #, TABLE #, INVOICE #. A number
   beside one of those is not a price.
-- Many receipts print each dish twice: once in English and once in Arabic on the
-  line below. That is ONE item. Use the English description and the price printed
-  on that line. Never emit the Arabic line as a separate item.
+- English is the primary language. Many receipts print each dish twice: once in
+  English and once in Arabic on the line below. That is ONE item — use the
+  English description, and never emit the Arabic line as a separate item.
+- Where both languages are present, always take the English wording, even if the
+  Arabic is clearer or longer. Do not mix the two in one description, and do not
+  append the Arabic in brackets.
+- If a line is printed ONLY in Arabic, give its English translation as the
+  description, kept short and plain (for example "كباب لحم" becomes "Lamb kebab").
+  Translate the dish name only — never translate or alter a number.
 - A named line under a DISCOUNT heading (for example "Fazaa 10%") is a discount,
   not a dish. Put its value in printed.discount.
 - quantity, unit_price and line_total are numbers. If only a line total is printed,
@@ -93,6 +99,13 @@ function isModelProblem(status, body){
   return /model|not found|not supported|unsupported|does not exist/i.test(String(body || ''));
 }
 
+/* A busy model is not a broken request. Google answers 503 UNAVAILABLE when a
+   particular model is saturated — common on the free tier — and the useful
+   response is to ask a different model, not to give up. 500 is treated the same
+   way. 429 is NOT: that is a quota signal about the account, and asking other
+   models would only spend more of it. */
+function isTransient(status){ return status === 503 || status === 500; }
+
 async function callGemini(imageB64, mime, deadline){
   let last = null;
   for (const model of GEMINI_FALLBACKS){
@@ -116,9 +129,10 @@ async function callGemini(imageB64, mime, deadline){
     clearTimeout(timer);
     if (attempt.res.ok) return Object.assign(attempt, {model});
     const body = await attempt.res.clone().text().catch(() => '');
-    if (!isModelProblem(attempt.res.status, body)) return Object.assign(attempt, {model});
-    console.error('[receipt-reader] model rejected, trying the next:', model, attempt.res.status);
-    last = Object.assign(attempt, {model});
+    const retryable = isModelProblem(attempt.res.status, body) || isTransient(attempt.res.status);
+    if (!retryable) return Object.assign(attempt, {model});
+    console.error('[receipt-reader] model unusable, trying the next:', model, attempt.res.status);
+    last = Object.assign(attempt, {model, busy: isTransient(attempt.res.status)});
   }
   return last;
 }
@@ -216,6 +230,9 @@ export default async function handler(req, res){
       aborted ? 'The reader provider did not answer in time. Try again, or use a smaller photo.'
               : 'Receipt reader temporarily unavailable.');
   }
+  if (call && call.busy && call.res && isTransient(call.res.status))
+    return fail(res, 503, 'ANTHROPIC_RATE_LIMITED',
+      'Every available model is busy right now. This is a free-tier capacity limit on the provider\'s side, not a problem with your photo — try again in a minute.');
   if (!call || call.timedOut || !call.res)
     return fail(res, 504, 'ANTHROPIC_REQUEST_FAILED',
       `The reader provider did not answer within ${Math.round(TOTAL_BUDGET_MS/1000)}s${call && call.model ? ' (last tried ' + call.model + ')' : ''}. Try again, or use a smaller photo.`);
