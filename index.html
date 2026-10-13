@@ -3358,6 +3358,26 @@ function AssignScreen(){
         ${pending ? `<div class="tiny" style="color:var(--accent); font-weight:600">${pending} ${pending===1?'item needs':'items need'} attention</div>`
                   : `<div class="tiny" style="color:var(--success); font-weight:600">Everything is allocated</div>`}
       </div>
+
+      ${/* What everyone's share is actually built from. Assigning is where a
+            wrong discount or VAT rate becomes obvious — the totals are finally
+            in front of you — so the charges are shown here with one tap back to
+            change them, rather than leaving the stepbar's Back link as the only
+            way and the charges themselves out of sight. */''}
+      <div class="footer-card">
+        <div class="between">
+          <div class="tiny dim">Charges on this check</div>
+          <button class="btn btn-ghost btn-sm" data-act="edit-charges">Change</button>
+        </div>
+        <div class="tiny" style="display:flex; flex-wrap:wrap; gap:4px 14px">
+          <span>Items <b>${money(calc.itemsSubtotal)}</b></span>
+          ${calc.discount ? `<span>Discount <b style="color:var(--success)">−${money(calc.discount)}</b></span>` : ''}
+          ${calc.service  ? `<span>Service <b>${money(calc.service)}</b></span>` : ''}
+          <span>VAT ${calc.ratePct}%${c.vatIncluded ? ' (incl.)' : ''} <b>${money(calc.vat)}</b></span>
+          <span>Total <b>${money(calc.checkTotal)}</b></span>
+        </div>
+      </div>
+
       <button class="btn btn-primary btn-block" data-act="calculate">Calculate split</button>
     </div>`;
 }
@@ -3961,6 +3981,10 @@ const actions = {
   },
   'close-sheet': () => { state.ui.sheet = null; render(); },
   calculate: goCalculate,
+  /* Straight back to the charges, not just one step back: from here the user
+     has a specific fix in mind. Assignments are untouched — they live on the
+     items, and returning to assign finds them exactly as they were. */
+  'edit-charges': () => { state.ui.checkView = 'review'; setStep('check'); },
   'assign-back': () => { state.ui.allowUnassigned = false; setStep('assign'); },
   share: shareSummary,
   copy: copySummary
