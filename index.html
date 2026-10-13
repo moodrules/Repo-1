@@ -956,6 +956,18 @@ function moneyTokens(text){
  * Everything it can't confidently classify is left out rather than guessed at —
  * a missing line the user adds beats a wrong line they don't notice.
  */
+/* The keyword filter above cannot catch these, because they do not read like
+   headers — they read like dishes. "DUPLICATA # 2" is a POS reprint marker that
+   parses perfectly as an item costing 2.00, and "Fazaa 10%  105.24" is a
+   discount line whose own text says nothing about discounts; it is only
+   identifiable by the DISCOUNT banner printed above it. So: one matched on
+   shape, one on the section it sits in. */
+const HEADER_LINE = /^\s*[-*=\s]*(duplicata|duplicate|re-?print|copy|original|guest\s*copy|merchant\s*copy|customer\s*copy|void|training)\b/i;
+const DISCOUNT_HEADER = /\bdiscount\b|\bpromo(tion)?\b|\bvoucher\b|\bcoupon\b|الحسم|خصم/i;
+const TOTAL_DISCOUNT  = /total\s*discount|إجمالي\s*الحسم/i;
+/* What closes the discount block: the totals that follow it. */
+const SECTION_END = /\b(sub\s*-?\s*total|subtotal|total|vat|v\.a\.t|tax|net|gross|cash|card|change|balance)\b|المجموع|الإجمالي|الضريبة/i;
+
 function parseReceipt(lines, overallConfidence){
   const rawText = lines.map(l => l.text).join('\n');
   const totals = {subtotal:null, vat:null, serviceCharge:null, discount:null, grandTotal:null};
@@ -964,11 +976,18 @@ function parseReceipt(lines, overallConfidence){
   let currency = 'AED';
   for (const [re, code] of CURRENCIES){ if (re.test(rawText)){ currency = code; break; } }
 
+  /* Every amount printed under the DISCOUNT banner, with the one from a
+     "TOTAL DISCOUNT" line marked. Collected rather than overwritten so a
+     disagreement between them is visible instead of silently resolved. */
+  let inDiscount = false;
+  const discountCandidates = [];
+
   lines.forEach(line => {
     // Tidy OCR's number confusions once, then work on that text throughout —
     // slicing against the untidied original loses the last digit of "18.OO".
     const text = tidyNumbers(line.text.replace(/\s+/g, ' ').trim());
     if (text.length < 2) return;
+    if (HEADER_LINE.test(text)) return;          // a reprint marker, not a dish
     const nums = moneyTokens(text);
     const last = nums.length ? nums[nums.length - 1] : null;
     const hasTotal = /\b(grand\s*total|total|amount\s*(due|paid)|balance\s*due)\b/i.test(text);
@@ -977,7 +996,18 @@ function parseReceipt(lines, overallConfidence){
     // check-level lines, most specific first
     if (/\bsub\s*-?\s*total\b/i.test(text))                { if (last) totals.subtotal = last.cents; return; }
     if (/\bservice\b|\bsvc\b/i.test(text))                 { if (last) totals.serviceCharge = last.cents; return; }
-    if (/\bdiscount\b|\bpromo\b|\bvoucher\b/i.test(text))  { if (last) totals.discount = Math.abs(last.cents); return; }
+    /* The discount block, not a single discount line. The banner opens it, the
+       totals that follow close it, and everything between belongs to the
+       discount — however it is named. */
+    if (DISCOUNT_HEADER.test(text)){
+      inDiscount = true;
+      if (last) discountCandidates.push({cents: Math.abs(last.cents), isTotal: TOTAL_DISCOUNT.test(text)});
+      return;
+    }
+    if (inDiscount){
+      if (SECTION_END.test(text)) inDiscount = false;            // block closed; parse this line normally
+      else { if (last) discountCandidates.push({cents: Math.abs(last.cents), isTotal:false}); return; }
+    }
     // "Total (inclusive of VAT)" is a total; "Total VAT" is a VAT line.
     if (hasTotal && (!hasVat || /inclusive|includ|incl\b/i.test(text))) { if (last) totals.grandTotal = last.cents; return; }
     if (hasVat)                                            { if (last && last.decimal) totals.vat = last.cents; return; }
@@ -1054,7 +1084,56 @@ function parseReceipt(lines, overallConfidence){
   }
 
   const itemsSum = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
+
+  /* Resolve the discount block. The "TOTAL DISCOUNT" line wins when there is
+     one; otherwise the largest amount in the block. Candidates that disagree
+     mean a digit was misread, which is a quality signal, not something to
+     average away. */
+  let discount = null, discountDisputed = false;
+  if (discountCandidates.length){
+    const totalLine = discountCandidates.find(c => c.isTotal);
+    discount = totalLine ? totalLine.cents : Math.max(...discountCandidates.map(c => c.cents));
+    /* A receipt may legitimately print several different discounts plus their
+       total. What is NOT legitimate is the same figure appearing twice with
+       different digits — so flag a near-miss against the total line, not any
+       difference. 105.24 against a "total" of 106.24 is a misread; a 20.00
+       component against a 106.24 total is just a component. */
+    if (totalLine){
+      const near = c => c.cents !== discount && Math.abs(c.cents - discount) <= Math.max(discount * 0.05, 100);
+      discountDisputed = discountCandidates.some(c => !c.isTotal && near(c));
+    }
+  }
+  if (discount != null) totals.discount = discount;
+
+  /* Does the parse hold together? A list of dishes that will not reconcile to
+     the printed total is not a reading of THIS receipt, and handing it over as
+     if it were is the one failure mode that actually costs the user money.
+     Checked here, once, against the numbers the receipt itself prints. */
+  const quality = (() => {
+    const problems = [];
+    const printed = totals.grandTotal ?? totals.subtotal ?? null;
+    let delta = null;
+    if (!items.length) problems.push('no items were read');
+    if (printed && itemsSum){
+      // Compare like with like: a printed grand total is net of discount and
+      // carries service and VAT, so rebuild that shape from the items and take
+      // whichever comparison is kinder before calling it a mismatch.
+      const rebuilt = itemsSum - (totals.discount || 0) + (totals.serviceCharge || 0) + (totals.vat || 0);
+      delta = Math.min(Math.abs(rebuilt - printed), Math.abs(itemsSum - printed)) / Math.max(printed, 1);
+      if (delta > 0.02)
+        problems.push(`the items add up to ${(itemsSum/100).toFixed(2)} against a printed ${(printed/100).toFixed(2)}`);
+    } else if (items.length){
+      problems.push('the receipt total was not readable, so the items could not be checked');
+    }
+    const weak = items.filter(i => (i.confidence || 0) < 0.6).length;
+    if (items.length && weak / items.length > 0.25)
+      problems.push(`${weak} of ${items.length} lines read poorly`);
+    if (discountDisputed) problems.push('the discount was printed twice and read differently each time');
+    return {ok: problems.length === 0, problems, delta, checked: printed != null};
+  })();
+
   return {
+    quality,
     currency, vatIncluded, vatRate: printedRate,
     merchant: findMerchant(lines), date: findDate(rawText),
     items,
@@ -1062,6 +1141,7 @@ function parseReceipt(lines, overallConfidence){
     vat: totals.vat ?? 0,
     serviceCharge: totals.serviceCharge ?? 0,
     discount: totals.discount ?? 0,
+    discountDisputed,
     grandTotal: totals.grandTotal ?? itemsSum,
     rawText,
     itemsSum,
@@ -2261,6 +2341,12 @@ Baileys 25ml | 11 | 6.50 | 71.50
 Item Price means the price of one, and Total Price means the price for that whole line.
 If the receipt shows only the total for a line, divide it by the quantity to get the item price.
 Only list things that were eaten or drunk. Leave out subtotal, total, tax, VAT, service charge, discount, change, cash and card lines.
+Leave out anything printed at the top of the receipt: the restaurant name, the date, and lines like DUPLICATA, CHECK #, TABLE # or the tax number. A number next to one of those is not a price.
+Many receipts print each dish twice — once in English and once in Arabic underneath. That is one item, not two. Use the English name and the price printed on that line.
+A named line under a DISCOUNT heading (for example Fazaa 10%) is a discount, not a dish. Leave it out.
+At the end, add one last line in this exact shape so the app can check your work, using the receipt's own printed figures:
+TOTALS | subtotal | discount | service | vat | total
+Write 0 for anything the receipt doesn't show.
 Write the numbers only, with no currency symbols.
 Write plain lines of text — not code. No brackets, no quotes, no programming language.
 Do not guess anything you cannot read clearly.
@@ -2293,6 +2379,7 @@ function parseSimpleImport(text){
 
   const items = [];
   const skipped = [];
+  let printed = null;
 
   String(text).split(/\r?\n/).forEach(raw => {
     let line = raw.trim();
@@ -2313,6 +2400,14 @@ function parseSimpleImport(text){
 
     const name = parts[0];
     if (/^(item name|name|description|item|qty|quantity)$/i.test(name)) return;   // header row
+    /* The trailing "TOTALS | subtotal | discount | service | vat | total" line
+       the prompt asks for. It is what lets a pasted list be checked against the
+       receipt's own printed figures instead of trusted blindly. */
+    if (/^totals?$/i.test(name)){
+      const f = parts.slice(1).map(money);
+      printed = {subtotal:f[0] ?? null, discount:f[1] ?? null, service:f[2] ?? null, vat:f[3] ?? null, total:f[4] ?? null};
+      return;
+    }
     const nums = parts.slice(1).map(money).filter(n => n !== null);
     if (!name || !nums.length){ skipped.push(raw.trim()); return; }
 
@@ -2335,7 +2430,22 @@ function parseSimpleImport(text){
       ? `No item lines recognised. Each line needs: name | quantity | item price | total price. First unreadable line: "${skipped[0].slice(0,60)}"`
       : 'Nothing to import — paste the list your AI tool produced.');
   }
-  return {receipt: {currency: null, items, subtotal: null, tax: null, total: null}, _skipped: skipped};
+  /* Same standard as a scanned receipt: if the AI gave us the printed figures,
+     the pasted list has to reconcile with them. A transcription that disagrees
+     with the receipt's own total is reported, not quietly imported. */
+  let warning = null;
+  if (printed && printed.total){
+    const sum = items.reduce((a, i) => a + (i.line_total != null ? i.line_total
+                                          : (i.unit_price || 0) * (i.quantity || 1)), 0);
+    const rebuilt = sum - (printed.discount || 0) + (printed.service || 0) + (printed.vat || 0);
+    const off = Math.min(Math.abs(rebuilt - printed.total), Math.abs(sum - printed.total));
+    if (off / Math.max(printed.total, 1) > 0.02)
+      warning = `The pasted items add up to ${sum.toFixed(2)}, but the receipt's printed total is ${printed.total.toFixed(2)}. Check for a missed or duplicated line.`;
+  }
+  return {receipt: {currency: null, items,
+                    subtotal: printed && printed.subtotal, tax: printed && printed.vat,
+                    total: printed && printed.total},
+          _skipped: skipped, _warning: warning, _printed: printed};
 }
 
 const isNum = v => typeof v === 'number' && isFinite(v);
@@ -2354,6 +2464,7 @@ const numOrNull = (v, label) => {
 function normalizeImportedReceipt(raw){
   let parsed;
   let skippedLines = [];
+  let importWarning = null;
   if (typeof raw === 'string'){
     if (!raw.trim()) throw new ImportError('Paste the list from your AI tool first.');
     // The simple "name | qty | price | total" list is the documented format;
@@ -2362,6 +2473,7 @@ function normalizeImportedReceipt(raw){
     if (!looksJson){
       const simple = parseSimpleImport(raw);
       skippedLines = simple._skipped || [];
+      importWarning = simple._warning || null;
       parsed = {receipt: simple.receipt};
     } else {
       // AI tools routinely wrap JSON in fences. Removing the wrapper is not
@@ -2406,6 +2518,7 @@ function normalizeImportedReceipt(raw){
   });
 
   skippedLines.slice(0, 3).forEach(l => warnings.push(`Ignored a line that wasn't in the item format: "${l.slice(0, 50)}"`));
+  if (importWarning) warnings.unshift(importWarning);   // reconciliation first — it matters most
   const itemsSum = items.reduce((a, i) => a + i.qty * i.unitPrice, 0);
   const subCents = subtotal !== null ? Math.round(subtotal * 100) : null;
   if (subCents !== null && Math.abs(subCents - itemsSum) > 50)
@@ -2445,7 +2558,15 @@ function ManualImportCard(){
     </div>
 
     ${open ? `
-    <p class="tiny dim">Temporary testing tool — paste receipt data while automatic receipt reading is being developed.</p>
+    ${Array.isArray(state.ui.handoffReason) && state.ui.handoffReason.length ? `
+      <div class="notice notice-warn">
+        <strong>The automatic reading didn't add up, so it wasn't used.</strong>
+        <ul style="margin:6px 0 0; padding-inline-start:18px">
+          ${state.ui.handoffReason.map(p => `<li>${esc(p)}</li>`).join('')}
+        </ul>
+        <div class="tiny" style="margin-top:6px">Your photo is still here. Send it to any AI with the prompt below and paste the list back — that reads bilingual receipts accurately and costs nothing.</div>
+      </div>` : `
+    <p class="tiny dim">Temporary testing tool — paste receipt data while automatic receipt reading is being developed.</p>`}
 
     <div class="card card-flat stack-sm" style="padding:12px">
       <div style="font-weight:600; font-size:14px">Step 1 — copy this to your AI tool</div>
@@ -3345,17 +3466,19 @@ const SCAN_STAGES = [
 ];
 /* The photo is captured and kept here; the reading happens in Claude chat and
    comes back through the existing import adapter. No new pipeline. */
-function handlePhotoHandoff(file){
+function handlePhotoHandoff(file, reason){
   if (!/^image\//.test(file.type)) return toast('That file isn\'t an image. Pick a JPG or PNG photo.', true);
   if (file.size > 20 * 1024 * 1024) return toast('That photo is over 20 MB. Try a smaller one.', true);
-  freePreview();
-  state.ui.preview = URL.createObjectURL(file);
+  const keep = state.ui.preview && state.ui.lastFile === file;   // a scan already made one
+  if (!keep){ freePreview(); state.ui.preview = URL.createObjectURL(file); }
   state.ui.lastFile = file;
   state.ui.manualImportOpen = true;
   state.ui.manualImportError = null;
-  ocrLog('IMAGE_RECEIVED', `${Math.round(file.size/1024)}KB ${file.type}`);
+  state.ui.handoffReason = reason || null;
+  if (!keep) ocrLog('IMAGE_RECEIVED', `${Math.round(file.size/1024)}KB ${file.type}`);
   render();
-  toast('Photo ready — send it to Claude, then paste the list back here.');
+  toast(reason ? 'That reading didn\'t add up — send the photo to an AI and paste the list back.'
+               : 'Photo ready — send it to Claude, then paste the list back here.');
 }
 
 function freePreview(){
@@ -3409,6 +3532,14 @@ async function handleImage(file){
       OCR_STATUS.state = 'ready'; OCR_STATUS.stages.smoke = true;
       ocrLog('READER_INIT_SUCCESS', 'OCR_READY — proven on a real receipt');
       ocrLog('OCR_READY', BACKEND_URL || '');
+    }
+    /* The reading is only accepted if it reconciles. An unreliable list is not
+       a lesser result than no list — it is worse, because the user has no way
+       to know which lines are wrong. So it is never applied; the photo stays
+       and the paste path opens instead, with the reason stated. */
+    if (data.quality && !data.quality.ok){
+      ocrLog('RECEIPT_PARSE_UNRELIABLE', data.quality.problems.join('; '));
+      return handlePhotoHandoff(file, data.quality.problems);
     }
     applyExtraction(data);
     toast(`Receipt read — ${data.items.length} ${data.items.length===1?'item':'items'} found. Check them before continuing.`);
