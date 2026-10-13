@@ -1233,64 +1233,13 @@ function getWorker(Tesseract){
   return workerPromise;
 }
 
-/* Engine readiness, proven rather than assumed.
-   READER_INIT_SUCCESS is emitted only after the library loads, the worker
-   initialises, the WASM core and language data load, and a real recognition
-   run on a generated "TEST" image comes back with text. */
-const ENGINE = {status:'unknown', detail:'', smoke:null, source:null};
-let engineInit = null;
-
-function makeTestImage(){
-  const c = document.createElement('canvas');
-  c.width = 300; c.height = 90;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-  ctx.fillStyle = '#000';
-  ctx.font = 'bold 56px Georgia, "Times New Roman", serif';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('TEST', 30, 48);
-  return c;
-}
-
-function initOcrEngine(onProgress){
-  if (!engineInit) engineInit = runEngineInit(onProgress).catch(e => { engineInit = null; throw e; });
-  return engineInit;
-}
-async function runEngineInit(onProgress){
-  ocrLog('READER_INIT_STARTED', 'loading library');
-  const T = await loadTesseract(onProgress);
-  ENGINE.source = OCR_SOURCES.name;
-  ocrLog('LIBRARY_LOADED', OCR_SOURCES.name);
-  const worker = await getWorker(T);
-  ocrLog('WORKER_INITIALISED', 'language ' + ocrLanguage());
-
-  // A library that loaded proves nothing. Recognise a known image.
-  try{
-    const canvas = makeTestImage();
-    const {data} = await withTimeout(worker.recognize(canvas, {}, {text:true, blocks:false}),
-                                     45000, 'timeout', 'smoke test timed out');
-    canvas.width = 0; canvas.height = 0;
-    const seen = String(data && data.text || '').replace(/[^A-Za-z]/g, '').toUpperCase();
-    ENGINE.smoke = seen || '(nothing)';
-    if (!seen){
-      ENGINE.status = 'failed'; ENGINE.detail = 'the engine ran but read no text from the test image';
-      ocrLog('READER_INIT_FAILED', ENGINE.detail);
-      throw new ScanError('unreadable', ENGINE.detail);
-    }
-    ENGINE.status = 'ready';
-    ENGINE.detail = seen.includes('TEST') ? 'read "TEST" correctly' : `read "${seen}" (expected TEST — recognition is weak but working)`;
-    ocrLog('READER_INIT_SUCCESS', ENGINE.detail);
-    ocrLog('OCR_READY', 'engine verified by smoke test');
-  }catch(e){
-    if (ENGINE.status !== 'failed'){
-      ENGINE.status = 'failed';
-      ENGINE.detail = (e && e.message) || 'smoke test failed';
-      ocrLog('READER_INIT_FAILED', ENGINE.detail);
-    }
-    throw e;
-  }
-  return worker;
-}
+/* Superseded: an earlier engine-init implementation lived here and RETURNED
+   THE WORKER. The current initOcrEngine (below) returns OCR_STATUS instead,
+   and because both were function declarations the later one silently won —
+   which is why the scan path received a status object and failed with
+   'worker.recognize is not a function' while the smoke test passed. The dead
+   copy is gone; readyWorker() below is the single way the scan path gets a
+   worker, and it hands back the very worker the smoke test proved. */
 
 /** Fetch each engine asset separately and report exactly which one fails. */
 async function runOcrDiagnostics(){
@@ -1338,9 +1287,16 @@ async function runOcrDiagnostics(){
 
   // The real thing: initialise and run OCR on a known image.
   try{
-    await initOcrEngine(null);
+    const w = await readyWorker(null);
     add(true, 'OCR worker initialised', 'language ' + ocrLanguage());
     add(true, 'OCR smoke test', 'recognised TEST through the worker');
+    /* Checks the object the SCAN path actually receives, not merely that init
+       resolved. Those two were different things once — the smoke test passed
+       while every scan died on worker.recognize — and no diagnostic could see
+       it, because nothing asked this question. */
+    const usable = !!w && typeof w.recognize === 'function';
+    add(usable, 'Scan path worker', usable ? 'recognize() present'
+        : 'engine ready but the scan path received ' + Object.prototype.toString.call(w));
   }catch(e){
     add(!!OCR_STATUS.stages.worker, 'OCR worker initialised', OCR_STATUS.stages.worker ? '' : OCR_STATUS.reason);
     add(false, 'OCR smoke test', OCR_STATUS.stages.smoke === false ? OCR_STATUS.reason : 'not reached');
@@ -1517,6 +1473,20 @@ async function initOcrEngine(onProgress){
   return OCR_STATUS;
 }
 
+/* The one way the scan path gets a worker. initOcrEngine proves the engine and
+   resolves with OCR_STATUS, not a worker — so ask getWorker, whose promise is
+   memoised, and the instance that comes back is the same one the smoke test
+   recognised "TEST" through. loadTesseract is memoised too, so after init this
+   resolves immediately. */
+async function readyWorker(onProgress){
+  await initOcrEngine(onProgress);
+  const T = await loadTesseract(onProgress);
+  const w = await getWorker(T);
+  if (!w || typeof w.recognize !== 'function')
+    throw new ScanError('workerblocked', 'engine reported ready but returned no usable worker');
+  return w;
+}
+
 function retireWorkerSoon(){
   clearTimeout(workerIdleTimer);
   workerIdleTimer = setTimeout(async () => {
@@ -1574,7 +1544,7 @@ const tesseractProvider = {
     onProgress && onProgress('prep', 0.08, 'Preparing receipt…');
 
     // Engine start-up and image preparation are independent — run them together.
-    const enginePromise = initOcrEngine(onProgress);   // includes the smoke test, once per session
+    const enginePromise = readyWorker(onProgress);     // proves the engine (smoke test, once per session) AND returns the worker
     const canvasPromise = preprocessImage(file);
     let canvas = null, worker = null, prep = null;
     try{
