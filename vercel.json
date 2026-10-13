@@ -1,11 +1,19 @@
 {
+  "buildCommand": "bash setup.sh eng ara",
+  "outputDirectory": ".",
   "headers": [
-    { "source": "/vendor/tesseract/core/(.*)",
+    { "source": "/vendor/tesseract/core/(.*)\\.wasm",
       "headers": [{ "key": "Content-Type", "value": "application/wasm" },
                   { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
     { "source": "/vendor/tesseract/lang/(.*)",
       "headers": [{ "key": "Content-Type", "value": "application/octet-stream" },
-                  { "key": "Content-Encoding", "value": "gzip" }] }
+                  { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/vendor/tesseract/(.*)\\.js",
+      "headers": [{ "key": "Content-Type", "value": "text/javascript" },
+                  { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }
+  ],
+  "redirects": [
+    { "source": "/api/receipt-reader.js", "destination": "/api/receipt-reader", "permanent": false }
   ],
   "functions": { "api/receipt-reader.js": { "maxDuration": 60 } }
 }

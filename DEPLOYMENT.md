@@ -1,117 +1,129 @@
-# Deploying Split to Vercel
+# Deploying Tally — the free path
 
-Static frontend plus one serverless function. No database, no framework, no
-build step.
+Static page plus a build step that downloads the free OCR engine. No key, no
+account, no database, no framework. Receipt photos are read in the browser and
+never uploaded.
 
 ```
-split-app/
-  index.html                 the whole app
-  api/receipt-reader.js      the only backend code
-  vercel.json                headers
-  vendor/tesseract/          optional: free on-device reader (see step 12)
+index.html                 the whole app
+setup.sh                   downloads the engine at build time
+vercel.json                buildCommand + asset headers
+vendor/tesseract/          filled by the build (git-ignored)
+api/receipt-reader.js      optional paid fallback — inert without a key
 ```
 
-## 1. Create the Vercel project
+## 1. Import the repository
+
+vercel.com/new → import this repo → framework preset **Other** → Deploy.
+
+Leave the build and output settings alone. `vercel.json` already sets:
+
+```json
+"buildCommand": "bash setup.sh eng ara",
+"outputDirectory": "."
+```
+
+Or from the CLI:
 
 ```bash
 npm i -g vercel
-cd split-app
-vercel            # accept the defaults; framework preset "Other"
+vercel          # accept the defaults
+vercel --prod
 ```
 
-Or push the folder to GitHub and import it at vercel.com/new.
+## 2. Add no environment variables
 
-## 2. Connect the repository
+The free path needs none. Adding `ANTHROPIC_API_KEY` only arms the optional
+server-side fallback (step 9); it is not required and costs money per scan.
 
-If you imported from Git, Vercel redeploys on every push. Nothing else to
-configure: `api/receipt-reader.js` is detected automatically as a function.
+## 3. Watch the build log
 
-## 3. Add ANTHROPIC_API_KEY
+It should show:
+
+```
+==> Fetching tesseract.js 5.1.1 into …/vendor/tesseract
+==> Fetching language model: eng
+==> Fetching language model: ara
+==> Done:
+    6.2M    …/vendor/tesseract
+```
+
+If a file fails to download the script prints `MISSING: …` and exits 1, so the
+deploy fails instead of publishing a reader that breaks in the browser. Re-run
+the deploy; the download sources are npm and jsDelivr (with a
+tessdata.projectnaptha.com fallback for the models).
+
+## 4. Confirm the engine is being served
+
+Open these two URLs on the deployed domain:
+
+- `/vendor/tesseract/worker.min.js` → JavaScript, `Content-Type:
+  text/javascript`
+- `/vendor/tesseract/lang/eng.traineddata.gz` → a binary download
+
+If the first returns your HTML page instead of script, the app will correctly
+decide the engine is absent and keep the reading UI off — that is the check
+working, not a bug.
+
+## 5. Open the app and check the mode
+
+Go to **Add check → Add the check**. With the engine present you get **Scan
+your check** and **Upload a receipt photo** as reading options, and the status
+line moves `initialising → ready`.
+
+## 6. Scan a real receipt
+
+**Run diagnostics** should read:
+
+```
+ENGINE_PRESENT            same-origin engine found — on-device reading enabled
+READER_CAPABILITIES_OK    assets + worker usable from local
+Engine source             local (same origin)
+IMAGE_RECEIVED            42KB image/jpeg
+OCR_PROGRESS              recognizing text 0.62
+RECEIPT_JSON_RECEIVED     6 items
+OCR STATUS: READY
+```
+
+`Engine source: local (same origin)` is the line that matters. If it says
+cross-origin CDN, `vendor/tesseract/` did not ship.
+
+The first scan also loads the WASM core and the language model (a few MB); it
+is cached from then on. Nothing is sent anywhere — check DevTools → Network:
+no request leaves the origin during a scan.
+
+## 7. Verify the extracted items
+
+Each visible line should appear on the review screen with its quantity and unit
+price. Anything the engine could not read confidently arrives empty and
+editable — it is not guessed at. Printed totals are reconciled against the
+computed ones and any mismatch is flagged, never silently overwritten.
+
+## 8. Verify calculations
+
+Set the country (Egypt 14% / UAE 5% / Saudi 15% / custom), choose VAT included
+or excluded, switch on service charge or discount if the bill has them, assign
+items, and check the per-person totals sum exactly to the check total. Order is
+items subtotal → discount → service charge → VAT → final total. All of this runs
+in the browser and is unchanged by the deployment.
+
+## 9. Optional: the paid fallback
+
+Only if you want a server-side reader for browsers that block Web Workers:
 
 ```bash
 vercel env add ANTHROPIC_API_KEY production
 vercel env add ANTHROPIC_API_KEY preview
 ```
 
-Or Project → Settings → Environment Variables.
+**The name matters.** Never `NEXT_PUBLIC_*`, `VITE_*` or `REACT_APP_*` — those
+prefixes are deliberately exposed to the browser. Plain `ANTHROPIC_API_KEY`
+stays server-side. `ANTHROPIC_MODEL` is optional (default `claude-sonnet-5`).
 
-**The name matters.** Do not call it `NEXT_PUBLIC_*`, `VITE_*` or
-`REACT_APP_*` — those prefixes are deliberately exposed to the browser. A plain
-`ANTHROPIC_API_KEY` stays server-side.
+With the engine present this endpoint is not used. Leaving the key unset is the
+free configuration and the app behaves correctly without it.
 
-## 4. Optionally add ANTHROPIC_MODEL
-
-Defaults to `claude-sonnet-5`. Set it only to pin a different current model.
-
-## 5. Deploy
-
-```bash
-vercel --prod
-```
-
-## 6. Open the deployed URL
-
-The app loads. Go to **Add check** → **Add the check**.
-
-## 7. Upload an actual receipt
-
-Use **Upload a receipt photo** with a real bill. Before the first successful
-scan the reader reports **configured**, not ready — the round trip has not been
-proven yet. That is intentional.
-
-## 8. Verify the event sequence
-
-Tap **Run diagnostics**. The log should read:
-
-```
-IMAGE_RECEIVED            42KB image/jpeg
-READER_REQUEST_STARTED    /api/receipt-reader
-IMAGE_SENT_TO_BACKEND     31KB base64, image/jpeg
-ANTHROPIC_REQUEST_STARTED via /api/receipt-reader
-ANTHROPIC_RESPONSE_RECEIVED HTTP 200 in 4120ms
-RECEIPT_JSON_RECEIVED     6 items
-READER_INIT_SUCCESS       OCR_READY — proven on a real receipt
-```
-
-`OCR STATUS: READY` only appears after that last line.
-
-## 9. Verify receipt items
-
-Each visible line should appear on the review screen with its quantity and unit
-price. Anything the model could not read confidently arrives as null and shows
-as an empty, editable field — it is not guessed at.
-
-## 10. Verify calculations
-
-Set the country (Egypt 14% / UAE 5% / Saudi 15% / custom), choose VAT included
-or excluded, switch on service charge or discount if the bill has them, assign
-items, and check that the per-person totals sum exactly to the check total. All
-of this runs in the browser and is unchanged by the deployment.
-
-## 11. Verify no key is exposed
-
-- View source on the deployed page: search for `ANTHROPIC`, `sk-ant`,
-  `x-api-key` — zero hits.
-- DevTools → Network → the `receipt-reader` request: the **request** carries
-  only `image_base64` and `mime_type`; the **response** carries only
-  `{ ok, model, data }`. No key in either direction.
-- Vercel → Logs: failure classes only. No image data, no key.
-
-## 12. Optional: free on-device reading instead
-
-The app prefers on-device Tesseract when it can run, and only falls back to the
-server reader when it cannot. To enable it, bundle the engine before deploying:
-
-```bash
-./setup.sh          # English
-./setup.sh eng ara  # English + Arabic
-```
-
-That adds ~6 MB under `vendor/tesseract/`, costs nothing per scan, and keeps
-receipt photos on the device. With it present, `/api/receipt-reader` is used
-only when a browser blocks workers.
-
-## Endpoint reference
+### Endpoint reference
 
 `POST /api/receipt-reader`
 
@@ -133,15 +145,26 @@ Errors: `{ "ok": false, "error": "CODE", "message": "…" }` where CODE is one o
 `ANTHROPIC_AUTH_FAILED`, `ANTHROPIC_RATE_LIMITED`, `ANTHROPIC_REQUEST_FAILED`,
 `ANTHROPIC_RESPONSE_INVALID`, `RECEIPT_PARSE_FAILED`.
 
-`GET /api/receipt-reader` → `{ ok, configured, model }` — configuration probe
+`GET /api/receipt-reader` → `{ ok, configured, model }` — a configuration probe
 only; it never marks the reader ready.
+
+## 10. Verify nothing leaks
+
+- View source on the deployed page: search `ANTHROPIC`, `sk-ant`, `x-api-key` —
+  zero hits.
+- During an on-device scan, DevTools → Network shows requests to
+  `/vendor/tesseract/…` on your own domain and nothing else.
+- Vercel → Logs: failure classes only. No image data, no key.
 
 ## Local development
 
 ```bash
-vercel dev        # serves index.html and /api/receipt-reader together
+bash setup.sh eng ara      # once — downloads the engine
+python3 -m http.server 8000
+# open http://localhost:8000
 ```
 
-Needs `ANTHROPIC_API_KEY` in `.env.local` (git-ignored). Without a key the
-endpoint returns `ANTHROPIC_AUTH_FAILED` and the app says the server reader is
-not configured — no crash, and manual entry still works.
+Serve it over http. Opened as a bare `file://` the browser blocks the OCR
+worker, the app detects that, and the photo hand-off path is used instead.
+
+`vercel dev` also works and additionally serves `/api/receipt-reader`.

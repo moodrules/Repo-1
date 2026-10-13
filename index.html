@@ -238,10 +238,29 @@ p{margin:0}
    Layers:  data model -> calculation engine -> OCR adapter -> UI components
    ========================================================================= */
 
-/* Photo reading (camera, upload, Tesseract, backend reader) is hidden until the
-   reader is working. The code is untouched — set this to true to bring the whole
-   flow back with no other change. */
-const OCR_UI_ENABLED = false;      // the in-page reading engines stay off
+/* On-device reading is switched on by the presence of the engine, not by a
+   hand-set flag. At boot the app asks its OWN origin for the worker script
+   (vendor/tesseract/worker.min.js, fetched at deploy time by setup.sh). If it
+   is there, the reading UI turns on and the engine is proved with a real smoke
+   test before the user taps anything; if it is not — a bare file:// open, or
+   the artifact frame, where no engine can read pixels — the UI stays off and
+   the photo hand-off path below is used instead. Nothing is ever claimed ready
+   on the strength of a flag. window.SPLIT_CONFIG.OCR_UI forces either way. */
+let OCR_UI_ENABLED = false;
+
+async function detectLocalEngine(){
+  try{
+    const cfg = (typeof window !== 'undefined' && window.SPLIT_CONFIG) || {};
+    if (typeof cfg.OCR_UI === 'boolean') return cfg.OCR_UI;
+    if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return false;
+    const r = await fetch(OCR_SOURCE_SETS[0].worker, {method:'GET', cache:'force-cache'});
+    if (!r || !r.ok) return false;
+    // A single-page host answering every path with index.html would pass a
+    // status check and fail later, so confirm it is script, not markup.
+    const type = (r.headers.get('content-type') || '').toLowerCase();
+    return type.includes('javascript') || type.includes('ecmascript');
+  }catch(_){ return false; }
+}
 /* Scan and Upload are live again, but what they do is capture the photo and
    hand it off: this frame has no engine that can read pixels (measured over
    many rounds), so the photo goes to Claude in chat, which transcribes it and
@@ -3817,9 +3836,18 @@ restore();
 render();
 // Capability resolution is async and never instant; re-render once it lands so
 // the import screen reflects what can actually be done here.
-if (OCR_UI_ENABLED) detectReader().then(r => {
-  activeProvider = providerFor(r.kind);
-  if (state.step === 'check' && state.ui.checkView === 'import') render();
+detectLocalEngine().then(present => {
+  if (!present){
+    ocrLog('ENGINE_ABSENT', 'no same-origin engine under ' + OCR_SOURCE_SETS[0].worker + ' — photo hand-off stays in use');
+    return;
+  }
+  OCR_UI_ENABLED = true;
+  ocrLog('ENGINE_PRESENT', 'same-origin engine found — on-device reading enabled, proving it now');
+  render();                               // brings up the reading UI and runs the smoke test
+  return detectReader().then(r => {
+    activeProvider = providerFor(r.kind);
+    if (state.step === 'check' && state.ui.checkView === 'import') render();
+  });
 });
 try { history.replaceState({step: state.step, checkView: state.ui.checkView}, ''); } catch(_){}
 </script>
