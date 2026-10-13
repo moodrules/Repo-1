@@ -37,7 +37,7 @@ const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
    function's JSON error, which is how a timeout arrives with no message at all.
    So: finish, and answer, before the wall. */
 const TOTAL_BUDGET_MS = 45000;
-const PER_ATTEMPT_MS = 22000;
+const PER_ATTEMPT_MS = 15000;      // smaller, so the budget covers three models rather than two
 
 /* The rules below are not decoration. Each one corresponds to a way a real
    receipt was misread: a POS header parsed as a 2.00 dish, a discount line
@@ -90,8 +90,27 @@ function fail(res, status, error, message){
    first and the rest only on a model-shaped rejection; anything else (auth,
    quota, a bad request) is returned immediately, never retried. The model that
    answered is reported back in the response. */
-const GEMINI_FALLBACKS = [GEMINI_MODEL, 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash']
+const GEMINI_FALLBACKS = [GEMINI_MODEL, 'gemini-3.6-flash', 'gemini-2.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.8-flash', 'gemini-2.5-flash']
   .filter((m, i, a) => m && a.indexOf(m) === i);
+
+/* Reading a receipt is extraction, not reasoning, but Gemini 3 Flash models
+   think at "medium" by default and that is what pushed two attempts past 22s
+   with nothing to show. Thinking is therefore asked down to its lowest setting.
+   Google documents thinking_level for the Interactions API; the field for
+   generateContent is not documented on that page, so rather than bet on a
+   guess, a request rejected for an unknown field is retried once without it —
+   slower, but it still answers. */
+const THINKING = { thinkingConfig: { thinkingLevel: 'low' } };
+let thinkingSupported = true;      // per instance; a rejection switches it off
+
+/* Narrow on purpose: it must name the thinking field. A blanket "unknown name"
+   match let an unrelated 400 switch thinking off for the whole instance, which
+   is how one bad request would quietly slow down every later one. */
+function isUnknownFieldError(status, body){
+  if (status !== 400) return false;
+  const t = String(body || '');
+  return /(unknown name|cannot find field)[^"]*"?(thinking[A-Za-z_]*)/i.test(t) || /thinking(config|_level|level)/i.test(t);
+}
 
 function isModelProblem(status, body){
   if (status === 404) return true;
@@ -128,7 +147,23 @@ async function callGemini(imageB64, mime, deadline){
     }
     clearTimeout(timer);
     if (attempt.res.ok) return Object.assign(attempt, {model});
-    const body = await attempt.res.clone().text().catch(() => '');
+    let body = await attempt.res.clone().text().catch(() => '');
+
+    /* The thinking field was not accepted. Drop it for this instance and try
+       the same model again — the request itself was fine. */
+    if (thinkingSupported && isUnknownFieldError(attempt.res.status, body)){
+      console.error('[receipt-reader] thinking control not accepted, retrying without it');
+      thinkingSupported = false;
+      const ctl2 = new AbortController();
+      const t2 = setTimeout(() => ctl2.abort(), Math.min(PER_ATTEMPT_MS, Math.max(0, deadline - Date.now())));
+      try{
+        const retry = await geminiAttempt(model, imageB64, mime, ctl2.signal);
+        clearTimeout(t2);
+        if (retry.res.ok) return Object.assign(retry, {model});
+        body = await retry.res.clone().text().catch(() => '');
+        attempt = retry;
+      }catch(_){ clearTimeout(t2); last = {timedOut: true, model}; continue; }
+    }
     const retryable = isModelProblem(attempt.res.status, body) || isTransient(attempt.res.status);
     if (!retryable) return Object.assign(attempt, {model});
     console.error('[receipt-reader] model unusable, trying the next:', model, attempt.res.status);
@@ -149,7 +184,9 @@ async function fetchGemini(url, imageB64, mime, signal){
     headers: { 'content-type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
     body: JSON.stringify({
       contents: [{ parts: [ { inline_data: { mime_type: mime, data: imageB64 } }, { text: PROMPT } ] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 4096 }
+      generationConfig: Object.assign(
+        { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 4096 },
+        thinkingSupported ? THINKING : {})
     })
   });
   return { res: r, text: async payload => (((payload.candidates || [])[0] || {}).content || {}).parts
