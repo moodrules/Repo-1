@@ -26,7 +26,24 @@ build aborts rather than shipping a reader that fails later.
 
 Full steps and the verification checklist: `DEPLOYMENT.md`.
 
-## How reading is chosen
+## How reading works
+
+Tap **Scan your check** or **Upload a receipt photo**: the app captures and
+previews the photo, then opens the paste panel with a prompt to send along with
+it. Any AI reads the photo, you paste its answer back, and the normal import
+pipeline takes over — including a reconciliation check against the receipt's own
+printed totals.
+
+Why not read it on the device automatically? It was tried and measured. On a
+bilingual UAE receipt — every dish printed in English with an Arabic line under
+it — Tesseract read the Arabic lines as Latin text and invented priced items:
+AED 1,994.24 of "items" against a true 1,114.00. The reconciliation guard caught
+it, but a reading that is thrown away after 20 seconds is worse than no reading.
+The engine is still installed and still works on clean English-only receipts;
+set `window.SPLIT_CONFIG.OCR_UI = true` (or `split.ocrAuto` = `1` in
+localStorage) to turn it back on.
+
+## How the engine is chosen when it is on
 
 The app does not trust a flag. At boot it asks its own origin for
 `vendor/tesseract/worker.min.js`:

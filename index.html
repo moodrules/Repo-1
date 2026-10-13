@@ -252,6 +252,17 @@ async function detectLocalEngine(){
   try{
     const cfg = (typeof window !== 'undefined' && window.SPLIT_CONFIG) || {};
     if (typeof cfg.OCR_UI === 'boolean') return cfg.OCR_UI;
+    /* Default: OFF, even where the engine is installed and proven. Measured on
+       a real bilingual UAE receipt, on-device Tesseract read Arabic sub-lines
+       as Latin text and invented priced lines; the reconciliation guard caught
+       it, but the user still waited ~20s for a reading that was then thrown
+       away. Going straight to the hand-off is both faster and more accurate,
+       and costs nothing. The engine stays installed for English-only receipts
+       — window.SPLIT_CONFIG.OCR_UI = true, or split.ocrAuto in localStorage,
+       turns it back on with no other change. */
+    let opted = null;
+    try { opted = localStorage.getItem('split.ocrAuto'); } catch(_){}
+    if (opted !== '1') return false;
     if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return false;
     const r = await fetch(OCR_SOURCE_SETS[0].worker, {method:'GET', cache:'force-cache'});
     if (!r || !r.ok) return false;
@@ -2545,7 +2556,7 @@ function normalizeImportedReceipt(raw){
 function ManualImportCard(){
   if (!MANUAL_IMPORT_ENABLED) return '';
   const open = !!state.ui.manualImportOpen;
-  return `<div class="card stack-sm" style="border-style:dashed">
+  return `<div class="card stack-sm" id="manual-import" style="border-style:dashed">
     <div class="row" style="gap:12px">
       <div class="ic" aria-hidden="true" style="background:var(--surface-2); color:var(--text); width:40px; height:40px; border-radius:12px; display:grid; place-items:center; flex:none">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
@@ -2931,7 +2942,7 @@ function CheckImport(){
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3.5"/></svg>
           </div>
           <div style="font-weight:700; font-size:18px; letter-spacing:-.02em">Scan your check</div>
-          <p class="sub" style="font-size:14px">Photograph the bill on the table.</p>
+          <p class="sub" style="font-size:14px">Photograph the bill — then one tap sends it to an AI to read.</p>
         </button>
 
         <div class="drop" id="dropzone" tabindex="0" role="button" aria-label="Upload a receipt photo from your device" style="padding:20px">
@@ -3477,6 +3488,12 @@ function handlePhotoHandoff(file, reason){
   state.ui.handoffReason = reason || null;
   if (!keep) ocrLog('IMAGE_RECEIVED', `${Math.round(file.size/1024)}KB ${file.type}`);
   render();
+  // The paste panel sits below the photo preview; a toast alone leaves the user
+  // looking at their receipt with no visible next step.
+  requestAnimationFrame(() => {
+    const card = document.getElementById('manual-import');
+    if (card && card.scrollIntoView) try { card.scrollIntoView({behavior:'smooth', block:'start'}); } catch(_){ card.scrollIntoView(); }
+  });
   toast(reason ? 'That reading didn\'t add up — send the photo to an AI and paste the list back.'
                : 'Photo ready — send it to Claude, then paste the list back here.');
 }
@@ -3939,7 +3956,7 @@ render();
 // the import screen reflects what can actually be done here.
 detectLocalEngine().then(present => {
   if (!present){
-    ocrLog('ENGINE_ABSENT', 'no same-origin engine under ' + OCR_SOURCE_SETS[0].worker + ' — photo hand-off stays in use');
+    ocrLog('READING_VIA_HANDOFF', 'automatic on-device reading is off by default — the photo is captured here and transcribed by an AI, which is accurate on bilingual receipts and free');
     return;
   }
   OCR_UI_ENABLED = true;
