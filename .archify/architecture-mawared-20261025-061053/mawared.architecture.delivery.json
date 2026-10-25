@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "2c0a54f9-667c-4626-a05f-0978aa60bd11",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/candidate.json",
+  "output": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.html",
+  "specification": {
+    "sha256": "7ccfce19b8b9b9674ed6c6ef9fbb0a7a6eb3bb90ae98a53032517a66b72ed995",
+    "bytes": 7524
+  },
+  "artifact": {
+    "sha256": "2fadbc748c58097563156ae20e2c5880d6793175472862fedd3c1eefd7339908",
+    "bytes": 843344
+  }
+}

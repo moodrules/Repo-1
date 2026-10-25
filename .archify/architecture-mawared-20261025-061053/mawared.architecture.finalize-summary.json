@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "skipped",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/candidate.json",
+    "sha256": "6bd8af5a9b7550a93ef135ba884a2bfc3dfbcd14206ebfb95e3314cc6e6744ed",
+    "bytes": 5225
+  },
+  "artifact": {
+    "path": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.html",
+    "sha256": "8ceecca8566f546a70c9f00c9563cb2b259d3d6b25e6e2eac63a900d7a9ffc9e",
+    "bytes": 844814
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "skipped"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/chrome-unavailable",
+      "severity": "warning",
+      "message": "No supported browser found. Install Chrome/Chromium (or Microsoft Edge), or set ARCHIFY_CHROME to its executable path.",
+      "subject": {
+        "artifact": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.html"
+      },
+      "evidence": {
+        "executable": null
+      },
+      "supportedFixes": [
+        "set ARCHIFY_CHROME to a Chrome/Chromium executable (or Microsoft Edge) and rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.finalize.json",
+    "summaryReceipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.finalize-summary.json",
+    "browserCheckReceipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 946,
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  }
+}

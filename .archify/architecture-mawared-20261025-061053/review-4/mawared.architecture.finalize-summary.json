@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/candidate.json",
+    "sha256": "7ccfce19b8b9b9674ed6c6ef9fbb0a7a6eb3bb90ae98a53032517a66b72ed995",
+    "bytes": 7524
+  },
+  "artifact": {
+    "path": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/mawared.architecture.html",
+    "sha256": "2fadbc748c58097563156ae20e2c5880d6793175472862fedd3c1eefd7339908",
+    "bytes": 843344
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/review-4/mawared.architecture.finalize.json",
+    "summaryReceipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/review-4/mawared.architecture.finalize-summary.json",
+    "browserCheckReceipt": "/home/user/Repo-1/.archify/architecture-mawared-20261025-061053/review-4/mawared.architecture.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3891,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}
