@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MAWARED client-side architecture",
+    "locale": "en",
+    "output": ".archify/architecture-mawared-20261025-061053/mawared.architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "Users",
+      "sublabel": "9 demo roles",
+      "pos": [
+        40,
+        420
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Demo gate",
+      "sublabel": "gate.js · demo login",
+      "pos": [
+        245,
+        420
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "no real auth"
+    },
+    {
+      "id": "shell",
+      "type": "frontend",
+      "label": "App shell",
+      "sublabel": "mawared.js · router",
+      "pos": [
+        450,
+        180
+      ],
+      "size": [
+        130,
+        540
+      ]
+    },
+    {
+      "id": "i18n",
+      "type": "frontend",
+      "label": "Bilingual UI",
+      "sublabel": "EN / AR · RTL",
+      "pos": [
+        450,
+        60
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "BrowserStore",
+      "sublabel": "localStorage",
+      "pos": [
+        450,
+        780
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "bp-db-v3"
+    },
+    {
+      "id": "seed",
+      "type": "database",
+      "label": "Seed data",
+      "sublabel": "synthetic · demo",
+      "pos": [
+        245,
+        780
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "plan",
+      "type": "backend",
+      "label": "Plan & approve",
+      "sublabel": "formulation · review",
+      "pos": [
+        655,
+        180
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "admin",
+      "type": "backend",
+      "label": "Administration",
+      "sublabel": "master data · roles",
+      "pos": [
+        655,
+        300
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "execute",
+      "type": "backend",
+      "label": "Execution",
+      "sublabel": "monitor · forecast",
+      "pos": [
+        655,
+        420
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "reports",
+      "type": "backend",
+      "label": "Reports & packs",
+      "sublabel": "xlsx · print · CSV",
+      "pos": [
+        655,
+        540
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "homes",
+      "type": "backend",
+      "label": "Role homes",
+      "sublabel": "home · leader brief",
+      "pos": [
+        655,
+        660
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "Core engine",
+      "sublabel": "planning · RBAC · audit",
+      "pos": [
+        860,
+        240
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "core.js"
+    },
+    {
+      "id": "exec",
+      "type": "backend",
+      "label": "Execution engine",
+      "sublabel": "position · revisions",
+      "pos": [
+        860,
+        420
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "exec.js"
+    },
+    {
+      "id": "insights",
+      "type": "backend",
+      "label": "Insights engine",
+      "sublabel": "rule cards · offline",
+      "pos": [
+        860,
+        600
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "insights.js"
+    },
+    {
+      "id": "ledger",
+      "type": "external",
+      "label": "Oracle Fusion CSV",
+      "sublabel": "Budget vs Actual",
+      "pos": [
+        1065,
+        420
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "files",
+      "type": "external",
+      "label": "Files out",
+      "sublabel": "xlsx · PDF · CSV",
+      "pos": [
+        1065,
+        540
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "claude",
+      "type": "cloud",
+      "label": "Claude runtime",
+      "sublabel": "window.claude",
+      "pos": [
+        1065,
+        660
+      ],
+      "size": [
+        130,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Browser tab: client-side only, no server",
+      "wraps": [
+        "gate",
+        "shell",
+        "i18n",
+        "store",
+        "seed",
+        "plan",
+        "admin",
+        "execute",
+        "reports",
+        "homes",
+        "core",
+        "exec",
+        "insights"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "users-gate",
+      "from": "users",
+      "to": "gate",
+      "label": "login",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gate-shell",
+      "from": "gate",
+      "to": "shell",
+      "label": "home",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shell-i18n",
+      "from": "shell",
+      "to": "i18n",
+      "label": "t()"
+    },
+    {
+      "id": "shell-store",
+      "from": "shell",
+      "to": "store",
+      "label": "load / save",
+      "variant": "dashed"
+    },
+    {
+      "id": "seed-shell",
+      "from": "seed",
+      "to": "shell",
+      "label": "if empty",
+      "variant": "dashed"
+    },
+    {
+      "id": "shell-plan",
+      "from": "shell",
+      "to": "plan"
+    },
+    {
+      "id": "shell-admin",
+      "from": "shell",
+      "to": "admin"
+    },
+    {
+      "id": "shell-execute",
+      "from": "shell",
+      "to": "execute"
+    },
+    {
+      "id": "shell-reports",
+      "from": "shell",
+      "to": "reports"
+    },
+    {
+      "id": "shell-homes",
+      "from": "shell",
+      "to": "homes"
+    },
+    {
+      "id": "plan-core",
+      "from": "plan",
+      "to": "core"
+    },
+    {
+      "id": "admin-core",
+      "from": "admin",
+      "to": "core"
+    },
+    {
+      "id": "execute-exec",
+      "from": "execute",
+      "to": "exec"
+    },
+    {
+      "id": "reports-exec",
+      "from": "reports",
+      "to": "exec"
+    },
+    {
+      "id": "homes-insights",
+      "from": "homes",
+      "to": "insights"
+    },
+    {
+      "id": "exec-core",
+      "from": "exec",
+      "to": "core",
+      "label": "baselines"
+    },
+    {
+      "id": "ledger-exec",
+      "from": "ledger",
+      "to": "exec",
+      "label": "CSV",
+      "variant": "dashed"
+    },
+    {
+      "id": "reports-files",
+      "from": "reports",
+      "to": "files",
+      "label": "export",
+      "variant": "dashed"
+    },
+    {
+      "id": "homes-claude",
+      "from": "homes",
+      "to": "claude",
+      "label": "reading",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Layers",
+      "items": [
+        "Shell registers workspace modules through window.MAWARED_MODULES",
+        "Modules only present; every figure comes from the engines",
+        "Engines have no DOM access",
+        "Insights engine reads the core and execution models"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Modules",
+      "items": [
+        "Plan & approve: strategy, plan, approved",
+        "Execution: monitor, forecast, ledger, revisions",
+        "Reports & packs: reports, packs, xlsx"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Limits",
+      "items": [
+        "Demo login: no authentication",
+        "State sits in this browser's localStorage, not an audit store",
+        "Figures are synthetic until a GL feed exists"
+      ]
+    }
+  ]
+}
